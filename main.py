@@ -1,41 +1,73 @@
 
+import argparse
 import json
+from pathlib import Path
+import sys
+
 from conexao_banco import testar_conexao
 from resolutor import resolver_citacoes
 
-TEXTO_EXEMPLO = """DEFENSORIA PÚBLICA DA UNIÃO
-OFÍCIO JUNTO AO SUPERIOR TRIBUNAL MILITAR
-
-Processo nº 1292746-27.2020.7.13.1173
-Assistido: TRANSPORTES MARAJÓ EIRELI
-Memorial nº 255/2021
-
-MEMORIAL
-
-Excelentíssimos Senhores Ministros, a Defensoria Pública da União apresenta o presente memorial...
-
-Invoca-se, ainda, o julgado do STF proferido em 2024 pela relatoria de Dias Toffoli.
-Invoca-se, ainda, a Reclamação nº 66.516/RO, no ponto em que afasta a exigência combatida.
-Invoca-se, ainda, o AgInt 7557430-50.2018.7.00.0000/DF.
-Aplica-se o art. 186 do Código Civil.
-"""
-
 
 def main():
-    print(" Inicializando pipeline do Desafio Jusbrasil...")
+    parser = argparse.ArgumentParser(
+        description="Pipeline de extração e classificação - Desafio Jusbrasil"
+    )
+    parser.add_argument(
+        "arquivo",
+        nargs="?",
+        type=str,
+        help="Caminho do arquivo .txt a ser analisado",
+    )
+    parser.add_argument(
+        "--saida",
+        "-o",
+        type=str,
+        help="Caminho opcional para salvar o JSON resultante",
+    )
 
-    # 1. Validação simples de ambiente e banco
+    args = parser.parse_args()
+
     sucesso, _ = testar_conexao()
     if not sucesso:
-        print(" Falha na conexão com o banco de dados.")
+        print(" Erro ao conectar ao banco de dados.", file=sys.stderr)
+        sys.exit(1)
+
+    # Execução de teste/demonstração simples sem argumentos
+    if not args.arquivo:
+        texto_demo = """DEFENSORIA PÚBLICA DA UNIÃO
+        MEMORIAL
+        Excelentíssimos Senhores Ministros...
+        Invoca-se, ainda, o julgado do STF proferido em 2024 pela relatoria de Dias Toffoli.
+        Invoca-se, ainda, a Reclamação nº 66.516/RO.
+        Aplica-se o art. 186 do Código Civil.
+        """
+        resultado = resolver_citacoes(texto_demo, documento_id="doc_demo")
+        print(json.dumps(resultado, indent=2, ensure_ascii=False))
         return
 
-    # 2. Processamento completo: Extração + Cruzamento Canônico + Classificação
-    resultado = resolver_citacoes(TEXTO_EXEMPLO)
+    caminho_input = Path(args.arquivo)
+    if not caminho_input.exists():
+        print(
+            f" Arquivo não encontrado: {caminho_input.resolve()}",
+            file=sys.stderr,
+        )
+        sys.exit(1)
 
-    # 3. Exibição do JSON estruturado (Schema v1.2)
-    print("\n--- Resultado Final (Schema v1.2) ---")
-    print(json.dumps(resultado, indent=2, ensure_ascii=False))
+    doc_id = caminho_input.stem  # Extrai o nome do arquivo sem extensão
+
+    with open(caminho_input, "r", encoding="utf-8") as f:
+        texto = f.read()
+
+    resultado = resolver_citacoes(texto, documento_id=doc_id)
+    json_str = json.dumps(resultado, indent=2, ensure_ascii=False)
+
+    print(json_str)
+
+    if args.saida:
+        caminho_saida = Path(args.saida)
+        caminho_saida.parent.mkdir(parents=True, exist_ok=True)
+        with open(caminho_saida, "w", encoding="utf-8") as f:
+            f.write(json_str)
 
 
 if __name__ == "__main__":

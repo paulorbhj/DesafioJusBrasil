@@ -21,9 +21,18 @@ Aplicação containerizada em Python para extração automatizada, normalizaçã
 **Como Executar o Projeto**
 
 1. Certifique-se de que o Docker Desktop está em execução.
+
 2. Compile a imagem Docker no terminal:
    docker build -t desafio-jusbrasil .
 
 3. Execute o container:
    docker run desafio-jusbrasil
+
+   ### 1. Execução via Linha de Comando (CLI)
+```bash
+# Processar um documento e exibir o JSON no stdout
+python main.py caminho/do/documento.txt
+
+# Processar um documento e salvar a saída em um arquivo .json
+python main.py caminho/do/documento.txt --saida resultado.json
 
