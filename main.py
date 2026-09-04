@@ -1,26 +1,43 @@
-print("Sistema em Python rodando com sucesso no Docker!")
 
-import unicodedata
+import json
+from conexao_banco import testar_conexao
+from resolutor import resolver_citacoes
 
-def limpar_e_normalizar_texto(texto_bruto: str) -> str:
-    """Garante que o texto use estritamente o padrão Unicode NFC."""
-    if not isinstance(texto_bruto, str):
-        return ""
-    # Força a normalização rígida para NFC
-    return unicodedata.normalize('NFC', texto_bruto)
+TEXTO_EXEMPLO = """DEFENSORIA PÚBLICA DA UNIÃO
+OFÍCIO JUNTO AO SUPERIOR TRIBUNAL MILITAR
 
-def processar_pnl(texto):
-    # Aqui entra o seu código de PNL, Scikit-Learn, Spacy, etc.
-    print(f"Processando com PNL: {texto}")
+Processo nº 1292746-27.2020.7.13.1173
+Assistido: TRANSPORTES MARAJÓ EIRELI
+Memorial nº 255/2021
+
+MEMORIAL
+
+Excelentíssimos Senhores Ministros, a Defensoria Pública da União apresenta o presente memorial...
+
+Invoca-se, ainda, o julgado do STF proferido em 2024 pela relatoria de Dias Toffoli.
+Invoca-se, ainda, a Reclamação nº 66.516/RO, no ponto em que afasta a exigência combatida.
+Invoca-se, ainda, o AgInt 7557430-50.2018.7.00.0000/DF.
+Aplica-se o art. 186 do Código Civil.
+"""
+
+
+def main():
+    print(" Inicializando pipeline do Desafio Jusbrasil...")
+
+    # 1. Validação simples de ambiente e banco
+    sucesso, _ = testar_conexao()
+    if not sucesso:
+        print(" Falha na conexão com o banco de dados.")
+        return
+
+    # 2. Processamento completo: Extração + Cruzamento Canônico + Classificação
+    resultado = resolver_citacoes(TEXTO_EXEMPLO)
+
+    # 3. Exibição do JSON estruturado (Schema v1.2)
+    print("\n--- Resultado Final (Schema v1.2) ---")
+    print(json.dumps(resultado, indent=2, ensure_ascii=False))
+
 
 if __name__ == "__main__":
-    # Exemplo 1: Tratando um input direto
-    dados_entrada = "Processo Judicial do Vovô"
-    texto_limpo = limpar_e_normalizar_texto(dados_entrada)
-    
-    # Exemplo 2: Se você estivesse lendo um arquivo de texto
-    # with open("dados.txt", "r", encoding="utf-8") as f:
-    #     texto_limpo = limpar_e_normalizar_texto(f.read())
+    main()
 
-    # Dispara o pipeline de Machine Learning / PNL com o dado garantido em NFC
-    processar_pnl(texto_limpo)
