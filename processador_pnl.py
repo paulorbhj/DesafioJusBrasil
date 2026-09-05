@@ -35,16 +35,13 @@ def identificar_inicio_corpo(texto: str) -> int:
     return min(posicoes) if posicoes else 0
 
 
-def formatar_numero_para_fts(numero_bruto: str) -> str:
-    """Reconstrói pontuações de milhar para busca FTS5 (unicode61)."""
-    mapa_ocr = str.maketrans({"O": "0", "o": "0", "l": "1", "I": "1", "S": "5"})
-    numero_limpo = numero_bruto.translate(mapa_ocr)
-    digitos = re.sub(r"\D", "", numero_limpo)
-
-    if not digitos:
-        return ""
-
-    return f"{int(digitos):,}".replace(",", ".")
+def formatar_numero_para_fts(trecho: str) -> str:
+    match = re.search(r"(\d{7}\-\d{2}\.\d{4}\.\d\.\d{2}\.\d{4})", trecho)
+    if match:
+        cnj = match.group(1)
+        # Garante aspas duplas em volta do CNJ
+        return f'"{cnj}"'
+    return ""
 
 
 def extrair_citacoes_brutas(texto: str) -> list[dict]:
@@ -52,78 +49,108 @@ def extrair_citacoes_brutas(texto: str) -> list[dict]:
     inicio_corpo = identificar_inicio_corpo(texto_norm)
     citacoes = []
 
-    # 1. Jurisprudências completas
-    padrao_jurisprudencia = (
-        r"(?i)\b(?:"
-        r"(?:AgRg\s+no\s+|AgInt\s+no\s+|AgInt\s+|no\s+)?(?:REsp|R\.?\s*Esp\.?|Recurso\s+Especial)|"
-        r"(?:AREsp|Recurso\s+Especial\s+em\s+Agravo)|"
-        r"(?:RHC|Recurso\s+em\s+Habeas\s+Corpus)|"
-        r"(?:HC|Habeas\s+Corpus)|"
-        r"(?:RSE)|"
-        r"(?:Reclamação)|"
-        r"(?:5[úu]mula|S[úu]mula)(?:\s+Vinculante)?"
-        r")\b(?:\s+(?:nº?|n\.|Nº|No|n))?\s*[\d\.\s\-]+(?:/[A-Z]{2}|\([A-Z]{2}\)|-[A-Z]{2})?"
+    # Captura QUALQUER sigla/classe processual (2 a 10 letras) seguida de número + UF ou CNJ
+    padrao_jurisprudencia_com_classe = (
+        r"(?i)\b[A-Z][a-zA-ZÀ-ÿ]{1,9}\b"  # Qualquer palavra/sigla (Rcl, MI, Sl, AgRg, etc.)
+        r"(?:\s+Vinculante)?"
+        r"(?:\s+(?:nº?|n\.|Nº|No|n))?[\s\n]*"
+        r"(?:\d{7}\-\d{2}\.\d{4}\.\d\.\d{2}\.\d{4}(?:/[A-Z]{2})?|[\d\.\s\-]{3,15}(?:/[A-Z]{2}|\([A-Z]{2}\)|-[A-Z]{2}))"
     )
 
-    # 2. Formato CNJ
-    padrao_cnj = r"(?i)\b(?:AgInt\s+)?\d{7}\-\d{2}\.\d{4}\.\d\.\d{2}\.\d{4}(?:/[A-Z]{2})?"
+    # CNJ isolado sem prefixo de classe
+    padrao_cnj_isolado = (
+        r"(?i)\b\d{7}\-\d{2}\.\d{4}\.\d\.\d{2}\.\d{4}(?:/[A-Z]{2})?"
+    )
 
-    # 3. Leis e Dispositivos Explícitos
+    # Leis e Dispositivos Explícitos
     padrao_leis_explicitas = (
         r"(?i)\b(?:art(?:igo|\.)?)\s+\d+[\w\.\-]*"
         r"(?:\s*,\s*(?:inciso|I|II|III|IV|V|VI|VII|VIII|IX|X|\d+))*"
         r"(?:\s+d[ao]\s+(?:Código\s+Civil|CPC|CC|CLT|CF(?:/88)?|CPP|CPM|CDC|Código\s+Eleitoral|LC\s+64/1990))?"
     )
 
-    # 4. Leis Incompletas / Menções Genéricas (Ex: "normas de regência da matéria")
+    # Leis Incompletas e Menções Genéricas
     padrao_leis_incompletas = (
-        r"(?i)\b(?:normas?|legislaçã[õ]es?|diplomas?|ordenamento)\s+de\s+regência(?:\s+da\s+matéria)?"
+        r"(?i)\b(?:"
+        r"(?:normas?|legislação|legislações|diplomas?|ordenamentos?)\s+de\s+regência(?:\s+da\s+matéria)?|"
+        r"(?:dispositivos?|normas?|preceitos?|artigos?|textos?|disposição|disposições|diplomas?)\s+"
+        r"(?:constitucionais|constitucional|infraconstitucionais|infraconstitucional|legais|legal|normatizadores|normatizador)"
+        r"(?:\s+invocados?|\s+invocadas?|\s+invocado)?"
+        r"(?:\s+na\s+origem)?"
+        r")\b"
     )
 
-    # 5. Jurisprudências Incompletas
+    # Jurisprudências Incompletas (permite quebras de linha, vírgulas e variações como "da/sob a/pela relatoria do/de")
     padrao_jurisprudencia_incompleta = (
-        r"(?i)\b(?:julgado|acórdão|decisão)\s+do\s+(?:STF|STJ|STM|TST|TSE)"
-        r"[^,\n.]+?relatoria\s+de\s+[A-Za-z\s]+"
+        r"(?i)\b(?:julgado|acórdão|decisão|precedente)s?\s+d[eo]\s+(?:STF|STJ|STM|TST|TSE|TJ[A-Z]{2}|TRF\d+)"
+        r"(?:[^.;]*?\b(?:d[ao]|sob\s+a|pel[ao])\s+relatoria\s+d[eo]\s+(?:Min(?:istro|\.)?\s+|Des(?:embargador|\.)?\s+|Juiz(?:a)?\s+)*[A-Za-zÀ-ÿ\s]+)"
     )
 
-    # Executa as buscas
-    for match in re.finditer(padrao_jurisprudencia, texto_norm):
+    for match in re.finditer(padrao_jurisprudencia_com_classe, texto_norm):
         if match.start() >= inicio_corpo:
-            citacoes.append({"inicio": match.start(), "fim": match.end(), "trecho": match.group().strip(), "tipo": "jurisprudencia"})
+            citacoes.append(
+                {
+                    "inicio": match.start(),
+                    "fim": match.end(),
+                    "trecho": " ".join(match.group().split()),
+                    "tipo": "jurisprudencia",
+                }
+            )
 
-    for match in re.finditer(padrao_cnj, texto_norm):
+    for match in re.finditer(padrao_cnj_isolado, texto_norm):
         if match.start() >= inicio_corpo:
-            citacoes.append({"inicio": match.start(), "fim": match.end(), "trecho": match.group().strip(), "tipo": "jurisprudencia"})
+            citacoes.append(
+                {
+                    "inicio": match.start(),
+                    "fim": match.end(),
+                    "trecho": " ".join(match.group().split()),
+                    "tipo": "jurisprudencia",
+                }
+            )
 
     for match in re.finditer(padrao_leis_explicitas, texto_norm):
         if match.start() >= inicio_corpo:
-            citacoes.append({"inicio": match.start(), "fim": match.end(), "trecho": match.group().strip(), "tipo": "lei"})
+            citacoes.append(
+                {
+                    "inicio": match.start(),
+                    "fim": match.end(),
+                    "trecho": " ".join(match.group().split()),
+                    "tipo": "lei",
+                }
+            )
 
     for match in re.finditer(padrao_leis_incompletas, texto_norm):
         if match.start() >= inicio_corpo:
-            citacoes.append({
-                "inicio": match.start(),
-                "fim": match.end(),
-                "trecho": match.group().strip(),
-                "tipo": "lei",
-                "classificacao_sugerida": "incompleta"
-            })
+            citacoes.append(
+                {
+                    "inicio": match.start(),
+                    "fim": match.end(),
+                    "trecho": " ".join(match.group().split()),
+                    "tipo": "lei",
+                    "classificacao_sugerida": "incompleta",
+                }
+            )
 
     for match in re.finditer(padrao_jurisprudencia_incompleta, texto_norm):
         if match.start() >= inicio_corpo:
-            citacoes.append({
-                "inicio": match.start(),
-                "fim": match.end(),
-                "trecho": match.group().strip(),
-                "tipo": "jurisprudencia",
-                "classificacao_sugerida": "incompleta"
-            })
+            citacoes.append(
+                {
+                    "inicio": match.start(),
+                    "fim": match.end(),
+                    "trecho": " ".join(match.group().split()),
+                    "tipo": "jurisprudencia",
+                    "classificacao_sugerida": "incompleta",
+                }
+            )
 
-    # Ordenação e eliminação de sobreposições
+    # Ordenação e eliminação de sobreposições (prioriza o match mais longo)
     citacoes.sort(key=lambda x: (x["inicio"], -x["fim"]))
     citacoes_unicas = []
     for item in citacoes:
-        if not any(c["inicio"] <= item["inicio"] and c["fim"] >= item["fim"] for c in citacoes_unicas):
+        if not any(
+            c["inicio"] <= item["inicio"] and c["fim"] >= item["fim"]
+            for c in citacoes_unicas
+        ):
             citacoes_unicas.append(item)
 
     citacoes_unicas.sort(key=lambda x: x["inicio"])

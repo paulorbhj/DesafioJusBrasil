@@ -49,16 +49,16 @@ def carregar_normas_memoria() -> dict:
 
 
 def buscar_acordao_fts(numero_formatado: str) -> list[tuple]:
-    """Consulta o índice FTS5 por frase exata para acórdãos[cite: 1]."""
+    """Consulta o índice FTS5 por frase exata para acórdãos."""
     conn = conectar_banco()
     cursor = conn.cursor()
 
     query = """
-        SELECT d.documento_id, d.id, d.tribunal, d.ano
+        SELECT d.documento_id, d.id, d.tribunal, d.ano, d.tipo, d.texto
         FROM documentos_fts JOIN documentos d ON d.rowid = documentos_fts.rowid
         WHERE d.natureza = 'acordao' AND documentos_fts MATCH ?
     """
-    cursor.execute(query, (f'"{numero_formatado}"',))
+    cursor.execute(query, (numero_formatado,))
     resultados = cursor.fetchall()
     conn.close()
 

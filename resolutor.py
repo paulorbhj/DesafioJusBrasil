@@ -2,6 +2,19 @@ import re
 from conexao_banco import buscar_acordao_fts, carregar_normas_memoria
 from processador_pnl import formatar_numero_para_fts, processar_pnl
 
+# Mapeamento de siglas para nomes por extenso das classes processuais
+CLASSES_MAPEAMENTO = {
+    "RSE": ["RSE", "RECURSO EM SENTIDO ESTRITO"],
+    "APL": ["APL", "APELAÇÃO", "APELACAO"],
+    "AC": ["AC", "APELAÇÃO CÍVEL", "APELACAO CIVEL"],
+    "AGINT": ["AGINT", "AGRAVO INTERNO"],
+    "AI": ["AI", "AGRAVO DE INSTRUMENTO"],
+    "HC": ["HC", "HABEAS CORPUS"],
+    "MS": ["MS", "MANDADO DE SEGURANÇA", "MANDADO DE SEGURANCA"],
+    "RE": ["RE", "RECURSO EXTRAORDINÁRIO", "RECURSO EXTRAORDINARIO"],
+    "RESP": ["RESP", "RECURSO ESPECIAL"],
+}
+
 
 def calcular_confianca(
     trecho: str,
@@ -115,7 +128,7 @@ def resolver_citacoes(
                 )
             continue
 
-        # 3. Acórdãos e Jurisprudências (Consulta FTS5 no SQLite)
+# 3. Acórdãos e Jurisprudências (Consulta FTS5 no SQLite)
         numero_fts = formatar_numero_para_fts(trecho)
         teve_ocr = any(
             char in trecho for char in ["O", "o", "l", "I", "S"]
@@ -140,7 +153,56 @@ def resolver_citacoes(
         matches = buscar_acordao_fts(numero_fts)
 
         if matches:
-            _, id_canonico, _, _ = matches[0]
+            # Extrai classe (ex: "RSE") e UF (ex: "DF") da citação
+            match_classe = re.search(r"^([A-Za-z]+)", trecho.strip())
+            classe_trecho = match_classe.group(1).upper() if match_classe else ""
+            termos_classe = CLASSES_MAPEAMENTO.get(classe_trecho, [classe_trecho])
+
+            match_uf = re.search(r"/([A-Z]{2})\b", trecho)
+            uf_trecho = match_uf.group(1).upper() if match_uf else ""
+
+            cnj_limpo = numero_fts.replace('"', "")
+            id_canonico_escolhido = None
+
+            if len(matches) == 1:
+                id_canonico_escolhido = matches[0][1]
+            else:
+                melhor_doc_id = None
+                maior_pontuacao = -999
+
+                for doc_id, id_canonico, tribunal, ano, tipo_doc, texto_doc in matches:
+                    texto_upper = str(texto_doc).upper()
+                    pos_cnj = texto_upper.find(cnj_limpo)
+
+                    if pos_cnj != -1:
+                        pontos = 0
+                        
+                        # Janelas de contexto ao redor do CNJ
+                        antes_cnj = texto_upper[max(0, pos_cnj - 80) : pos_cnj]
+                        depois_cnj = texto_upper[pos_cnj + len(cnj_limpo) : pos_cnj + len(cnj_limpo) + 80]
+
+                        # 1. Presença da classe antes do CNJ (+3)
+                        if any(termo in antes_cnj for termo in termos_classe if termo):
+                            pontos += 3
+
+                        # 2. Presença da UF igual à citação logo após o CNJ (+5)
+                        if uf_trecho and f"/{uf_trecho}" in depois_cnj:
+                            pontos += 5
+
+                        # 3. Indicação de processo principal/relator (+4)
+                        if "RELATOR" in depois_cnj:
+                            pontos += 4
+
+                        # 4. Penalidade se for citação incidental/prevenção (-10)
+                        if any(term in antes_cnj for term in ["PREVENTO", "APENSO", "ENVOLVENDO"]):
+                            pontos -= 10
+
+                        if pontos > maior_pontuacao:
+                            maior_pontuacao = pontos
+                            melhor_doc_id = id_canonico
+
+                id_canonico_escolhido = melhor_doc_id if melhor_doc_id else matches[0][1]
+
             conf = calcular_confianca(
                 trecho, "real", tipo, match_exato=True, teve_ocr=teve_ocr
             )
@@ -154,7 +216,7 @@ def resolver_citacoes(
                     "classificacao": "real",
                     "resolucao": {
                         "fonte": "jusbrasil",
-                        "id_canonico": str(id_canonico),
+                        "id_canonico": str(id_canonico_escolhido),
                     },
                     "confianca": conf,
                 }
@@ -173,7 +235,7 @@ def resolver_citacoes(
                     "confianca": conf,
                 }
             )
-
+            
     return {
         "schema_version": "1.2",
         "documento_id": documento_id,
