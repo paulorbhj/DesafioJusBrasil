@@ -36,3 +36,10 @@ python main.py caminho/do/documento.txt
 # Processar um documento e salvar a saída em um arquivo .json
 python main.py caminho/do/documento.txt --saida resultado.json
 
+
+4. Para executar no Docker 
+Os arquivos para análise(.txt) devem ficar na mesma pasta do projeto. Só assim poderão usar as linhas de código logo abaixo.
+
+docker build -t desafio-jus .
+docker run --rm desafio-jus python main.py txt/nome_do_arquivo.txt
+
