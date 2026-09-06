@@ -4,16 +4,61 @@ from processador_pnl import formatar_numero_para_fts, processar_pnl
 
 # Mapeamento de siglas para nomes por extenso das classes processuais
 CLASSES_MAPEAMENTO = {
+    # Recursais Principais e Agravos
     "RSE": ["RSE", "RECURSO EM SENTIDO ESTRITO"],
     "APL": ["APL", "APELAÇÃO", "APELACAO"],
     "AC": ["AC", "APELAÇÃO CÍVEL", "APELACAO CIVEL"],
     "AGINT": ["AGINT", "AGRAVO INTERNO"],
     "AI": ["AI", "AGRAVO DE INSTRUMENTO"],
-    "HC": ["HC", "HABEAS CORPUS"],
-    "MS": ["MS", "MANDADO DE SEGURANÇA", "MANDADO DE SEGURANCA"],
+    "AGRG": ["AGRG", "AGRAVO REGIMENTAL"],
+    "ARE": ["ARE", "AGRAVO EM RECURSO EXTRAORDINÁRIO", "AGRAVO EM RECURSO EXTRAORDINARIO"],
+    "ARESP": ["ARESP", "AGRAVO EM RECURSO ESPECIAL"],
     "RE": ["RE", "RECURSO EXTRAORDINÁRIO", "RECURSO EXTRAORDINARIO"],
     "RESP": ["RESP", "RECURSO ESPECIAL"],
+    "RHC": ["RHC", "RECURSO EM HABEAS CORPUS"],
+    "RMS": ["RMS", "RECURSO EM MANDADO DE SEGURANÇA", "RECURSO EM MANDADO DE SEGURANCA"],
+    "ED": ["ED", "EMBARGOS DE DECLARAÇÃO", "EMBARGOS DE DECLARACAO"],
+    "EI": ["EI", "EMBARGOS INFRINGENTES"],
+    "ERE": ["ERE", "EMBARGOS DE DIVERGÊNCIA EM RECURSO EXTRAORDINÁRIO", "EMBARGOS DE DIVERGENCIA EM RECURSO EXTRAORDINARIO"],
+    "ERESP": ["ERESP", "EMBARGOS DE DIVERGÊNCIA EM RECURSO ESPECIAL", "EMBARGOS DE DIVERGENCIA EM RECURSO ESPECIAL"],
+
+    # Ações Constitucionais e Garantias
+    "HC": ["HC", "HABEAS CORPUS"],
+    "MS": ["MS", "MANDADO DE SEGURANÇA", "MANDADO DE SEGURANCA"],
+    "MI": ["MI", "MANDADO DE INJUNÇÃO", "MANDADO DE INJUNCAO"],
+    "HD": ["HD", "HABEAS DATA"],
+    "RCL": ["RCL", "RECLAMAÇÃO", "RECLAMACAO"],
+
+    # Controle Concentrado de Constitucionalidade (STF)
+    "ADI": ["ADI", "ADIN", "AÇÃO DIRETA DE INCONSTITUCIONALIDADE", "ACAO DIRETA DE INCONSTITUCIONALIDADE"],
+    "ADC": ["ADC", "AÇÃO DECLARATÓRIA DE CONSTITUCIONALIDADE", "ACAO DECLARATORIA DE CONSTITUCIONALIDADE"],
+    "ADPF": ["ADPF", "ARGUIÇÃO DE DESCUMPRIMENTO DE PRECEITO FUNDAMENTAL", "ARGUICAO DE DESCUMPRIMENTO DE PRECEITO FUNDAMENTAL"],
+
+    # Ações Originárias, Suspensões e Incidentes
+    "AR": ["AR", "AÇÃO RESCISÓRIA", "ACAO RESCISORIA"],
+    "AP": ["AP", "AÇÃO PENAL", "ACAO PENAL"],
+    "CC": ["CC", "CONFLITO DE COMPETÊNCIA", "CONFLITO DE COMPETENCIA"],
+    "SL": ["SL", "SUSPENSÃO DE LIMINAR", "SUSPENSAO DE LIMINAR"],
+    "STP": ["STP", "SUSPENSÃO DE TUTELA PROVISÓRIA", "SUSPENSAO DE TUTELA PROVISORIA"],
+    "SS": ["SS", "SUSPENSÃO DE SEGURANÇA", "SUSPENSAO DE SEGURANCA"],
+    "PET": ["PET", "PETIÇÃO", "PETICAO"],
 }
+
+
+def obter_termos_classe(trecho: str) -> list:
+    """Identifica a classe no trecho (seja por sigla ou por extenso)
+    e retorna a lista correspondente do CLASSES_MAPEAMENTO.
+    """
+    trecho_upper = trecho.strip().upper()
+    for sigla, variacoes in CLASSES_MAPEAMENTO.items():
+        for variacao in variacoes:
+            padrao = r"\b" + re.escape(variacao) + r"\b"
+            if re.search(padrao, trecho_upper):
+                return variacoes
+
+    match_classe = re.search(r"^([A-Za-z]+)", trecho.strip())
+    classe_fallback = match_classe.group(1).upper() if match_classe else ""
+    return [classe_fallback]
 
 
 def calcular_confianca(
@@ -23,16 +68,11 @@ def calcular_confianca(
     match_exato: bool = False,
     teve_ocr: bool = False,
 ) -> float:
-    """Calcula dinamicamente o score de confiança (0.00 a 1.00) combinando a
-
-    integridade do formato extraído com a validação da base canônica.
-    """
+    """Calcula dinamicamente o score de confiança (0.00 a 1.00)."""
     if classificacao == "real":
-        # Se houve necessidade de correção de OCR no trecho, penaliza levemente a confiança
         return 0.88 if teve_ocr else 0.98
 
     if classificacao == "inventada":
-        # Formato CNJ perfeito que NÃO existe na base canônica -> alta probabilidade de ser forjada
         padrao_cnj_estrito = (
             r"^\d{7}\-\d{2}\.\d{4}\.\d\.\d{2}\.\d{4}(?:/[A-Z]{2})?$"
         )
@@ -41,7 +81,6 @@ def calcular_confianca(
         return 0.80
 
     if classificacao == "incompleta":
-        # Expressões padrão de omissão identificadas via PNL
         if any(
             p in trecho.lower()
             for p in ["julgado do", "acórdão do", "decisão do"]
@@ -128,11 +167,17 @@ def resolver_citacoes(
                 )
             continue
 
-# 3. Acórdãos e Jurisprudências (Consulta FTS5 no SQLite)
+        # 3. Acórdãos e Jurisprudências (Consulta FTS5 no SQLite)
         numero_fts = formatar_numero_para_fts(trecho)
         teve_ocr = any(
             char in trecho for char in ["O", "o", "l", "I", "S"]
         ) and not re.search(r"\d", trecho)
+
+        # Se formatar_numero_para_fts falhar, extrai a sequência numérica do trecho
+        if not numero_fts:
+            match_num = re.search(r"(\d{1,7}(?:\.\d{3})*(?:-\d+)?|\d{7}-\d{2}\.\d{4}\.\d\.\d{2}\.\d{4})", trecho)
+            if match_num:
+                numero_fts = f'"{match_num.group(1)}"'
 
         if not numero_fts:
             conf = calcular_confianca(trecho, "inventada", tipo)
@@ -152,16 +197,19 @@ def resolver_citacoes(
 
         matches = buscar_acordao_fts(numero_fts)
 
+        # Fallback: Se a busca exata falhar devido a sufixos como "/PR", busca apenas o número limpo
+        if not matches and numero_fts:
+            numero_limpo = re.sub(r"/[A-Z]{2}", "", numero_fts.replace('"', "")).strip()
+            if numero_limpo and numero_limpo != numero_fts.replace('"', ""):
+                matches = buscar_acordao_fts(f'"{numero_limpo}"')
+
         if matches:
-            # Extrai classe (ex: "RSE") e UF (ex: "DF") da citação
-            match_classe = re.search(r"^([A-Za-z]+)", trecho.strip())
-            classe_trecho = match_classe.group(1).upper() if match_classe else ""
-            termos_classe = CLASSES_MAPEAMENTO.get(classe_trecho, [classe_trecho])
+            termos_classe = obter_termos_classe(trecho)
 
             match_uf = re.search(r"/([A-Z]{2})\b", trecho)
             uf_trecho = match_uf.group(1).upper() if match_uf else ""
 
-            cnj_limpo = numero_fts.replace('"', "")
+            cnj_limpo = re.sub(r"/[A-Z]{2}", "", numero_fts.replace('"', "")).strip()
             id_canonico_escolhido = None
 
             if len(matches) == 1:
@@ -173,11 +221,11 @@ def resolver_citacoes(
                 for doc_id, id_canonico, tribunal, ano, tipo_doc, texto_doc in matches:
                     texto_upper = str(texto_doc).upper()
                     pos_cnj = texto_upper.find(cnj_limpo)
+                    if pos_cnj == -1 and "." in cnj_limpo:
+                        pos_cnj = texto_upper.find(cnj_limpo.replace(".", ""))
 
                     if pos_cnj != -1:
                         pontos = 0
-                        
-                        # Janelas de contexto ao redor do CNJ
                         antes_cnj = texto_upper[max(0, pos_cnj - 80) : pos_cnj]
                         depois_cnj = texto_upper[pos_cnj + len(cnj_limpo) : pos_cnj + len(cnj_limpo) + 80]
 
@@ -193,7 +241,7 @@ def resolver_citacoes(
                         if "RELATOR" in depois_cnj:
                             pontos += 4
 
-                        # 4. Penalidade se for citação incidental/prevenção (-10)
+                        # 4. Penalidade se for citação incidental (-10)
                         if any(term in antes_cnj for term in ["PREVENTO", "APENSO", "ENVOLVENDO"]):
                             pontos -= 10
 
@@ -235,7 +283,7 @@ def resolver_citacoes(
                     "confianca": conf,
                 }
             )
-            
+
     return {
         "schema_version": "1.2",
         "documento_id": documento_id,

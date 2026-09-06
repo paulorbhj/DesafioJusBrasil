@@ -46,14 +46,16 @@ def formatar_numero_para_fts(trecho: str) -> str:
 
 def extrair_citacoes_brutas(texto: str) -> list[dict]:
     texto_norm = limpar_e_normalizar_texto(texto)
-    inicio_corpo = identificar_inicio_corpo(texto_norm)
+    inicio_corpo = min(identificar_inicio_corpo(texto_norm), 250)
     citacoes = []
 
-    # Captura QUALQUER sigla/classe processual (2 a 10 letras) seguida de número + UF ou CNJ
+    # Captura classes processuais simples ou compostas seguidas de número e UF/CNJ
+    # Inclui preposições "no", "nos", "na", "nas" para suportar recursos como "AgInt no AREsp"
     padrao_jurisprudencia_com_classe = (
-        r"(?i)\b[A-Z][a-zA-ZÀ-ÿ]{1,9}\b"  # Qualquer palavra/sigla (Rcl, MI, Sl, AgRg, etc.)
-        r"(?:\s+Vinculante)?"
-        r"(?:\s+(?:nº?|n\.|Nº|No|n))?[\s\n]*"
+        r"\b[A-ZÀ-Ý][a-zà-ÿA-ZÀ-Ý]{0,15}"
+        r"(?:[\s\n]+(?:em|de|do|da|dos|das|no|nos|na|nas|e|[A-ZÀ-Ý][a-zà-ÿA-ZÀ-Ý]{0,15})){0,4}"
+        r"(?:\s+[Vv]inculante)?"
+        r"(?:[\s\n]+(?:[nN]º?|[nN]\.|[nN]o))?[\s\n]*"
         r"(?:\d{7}\-\d{2}\.\d{4}\.\d\.\d{2}\.\d{4}(?:/[A-Z]{2})?|[\d\.\s\-]{3,15}(?:/[A-Z]{2}|\([A-Z]{2}\)|-[A-Z]{2}))"
     )
 
@@ -80,10 +82,14 @@ def extrair_citacoes_brutas(texto: str) -> list[dict]:
         r")\b"
     )
 
-    # Jurisprudências Incompletas (permite quebras de linha, vírgulas e variações como "da/sob a/pela relatoria do/de")
+    # Permite quebras de linha intermediárias (\s+), mas limita a busca do nome para não engolir o texto seguinte
     padrao_jurisprudencia_incompleta = (
-        r"(?i)\b(?:julgado|acórdão|decisão|precedente)s?\s+d[eo]\s+(?:STF|STJ|STM|TST|TSE|TJ[A-Z]{2}|TRF\d+)"
-        r"(?:[^.;]*?\b(?:d[ao]|sob\s+a|pel[ao])\s+relatoria\s+d[eo]\s+(?:Min(?:istro|\.)?\s+|Des(?:embargador|\.)?\s+|Juiz(?:a)?\s+)*[A-Za-zÀ-ÿ\s]+)"
+        r"(?i)\b(?:julgado|acórdão|decisão|precedente|reclamação|habeas\s+corpus|súmula|agravo|recurso|Rcl|HC|MS)s?[\s\n]+"
+        r"d[eo][\s\n]+(?:STF|STJ|STM|TST|TSE|TJ[A-Z]{2}|TRF\d+)"
+        r"(?:[\s\n]*,?[\s\n]*(?:de[\s\n]+\d{4}|proferid[oa][\s\n]+em[\s\n]+\d{4}))?"
+        r"(?:[\s\n]*,?[\s\n]*(?:(?:d[ao]|sob\s+a|pel[ao])[\s\n]+relatoria[\s\n]+d[eo]|Rel(?:\.|ator(?:a)?)?[\s\n]*(?:d[eo])?))"
+        r"[\s\n]*(?:Min(?:istro|\.)?[\s\n]+|Des(?:embargador|\.)?[\s\n]+|Juiz(?:a)?[\s\n]+)*"
+        r"([A-ZÀ-ÿ][A-Za-zÀ-ÿ]+(?:[\s\n]+(?:de|da|do|dos|das)?[\s\n]*[A-ZÀ-ÿ][A-Za-zÀ-ÿ]+){1,3})"
     )
 
     for match in re.finditer(padrao_jurisprudencia_com_classe, texto_norm):
