@@ -1,64 +1,151 @@
 import re
+import unicodedata
 from conexao_banco import buscar_acordao_fts, carregar_normas_memoria
 from processador_pnl import formatar_numero_para_fts, processar_pnl
 
-# Mapeamento de siglas para nomes por extenso das classes processuais
+
+
+def remover_acentos(texto: str) -> str:
+    return "".join(
+        c for c in unicodedata.normalize("NFD", texto)
+        if unicodedata.category(c) != "Mn"
+    )
+
+# Mapeamento expandido de siglas, compostos e nomes por extenso das classes processuais
 CLASSES_MAPEAMENTO = {
-    # Recursais Principais e Agravos
+    # --- CLASSES COMPOSTAS E RECURSOS COMBINADOS (Buscados prioritariamente) ---
+    "EDCL_AGINT_ARESP": [
+        "EDCL NOS EDCL NO AGINT NO ARESP",
+        "EDCL NO AGINT NO ARESP",
+        "EMBARGOS DE DECLARAÇÃO NO AGRAVO INTERNO NO AGRAVO EM RECURSO ESPECIAL",
+    ],
+    "EDCL_AGINT_RESP": [
+        "EDCL NO AGINT NO RESP",
+        "EMBARGOS DE DECLARAÇÃO NO AGRAVO INTERNO NO RECURSO ESPECIAL",
+    ],
+    "AGINT_EDCL_RESP": [
+        "AGINT NOS EDCL NO RESP",
+        "AGRAVO INTERNO NOS EMBARGOS DE DECLARAÇÃO NO RECURSO ESPECIAL",
+    ],
+    "AGINT_ARESP": [
+        "AGINT NO ARESP",
+        "AGRAVO INTERNO NO AGRAVO EM RECURSO ESPECIAL",
+        "AGRAVO INTERNO NO ARESP",
+    ],
+    "AGINT_RESP": [
+        "AGINT NO RESP",
+        "AGRAVO INTERNO NO RECURSO ESPECIAL",
+        "AGINT NO RECURSO ESPECIAL",
+    ],
+    "AGRG_ARESP": [
+        "AGRG NO ARESP",
+        "AGRAVO REGIMENTAL NO AGRAVO EM RECURSO ESPECIAL",
+    ],
+    "AGRG_RESP": [
+        "AGRG NO RESP",
+        "AGRAVO REGIMENTAL NO RECURSO ESPECIAL",
+        "AGRG NO REC. ESP.",
+    ],
+    "EDCL_RMS": [
+        "EMBARGOS DE DECLARAÇÃO NO RECURSO EM MANDADO DE SEGURANÇA",
+        "EDCL NO RMS",
+        "ED NO RMS",
+    ],
+    "AGR_RESPE": [
+        "AGR-RESPE",
+        "AGRAVO REGIMENTAL NO RECURSO ESPECIAL ELEITORAL",
+        "ED NO AGR-RESPE",
+        "EDS NO AGR-RESPE",
+    ],
+    "AGR_AI": [
+        "AGR-AI",
+        "AGRAVO REGIMENTAL NO AGRAVO DE INSTRUMENTO",
+        "AGRG NO AI",
+    ],
+    "AGRG_HC": [
+        "AGRG NO HC",
+        "AGRG NO H.C.",
+        "AGRAVO REGIMENTAL NO HABEAS CORPUS",
+    ],
+
+    # --- JUSTIÇA DO TRABALHO (TST) E ELEITORAL (TSE) ---
+    "ED_E_ED_RR": [
+        "ED-E-ED-RR",
+        "ED-E-ED-ARR",
+        "EMBARGOS EM EMBARGOS DE DECLARAÇÃO EM RECURSO DE REVISTA",
+    ],
+    "ARR": [
+        "ARR",
+        "AGARR",
+        "AGRAVO DE INSTRUMENTO E RECURSO DE REVISTA",
+    ],
+    "RR": ["RR", "RECURSO DE REVISTA"],
+    "RESPE": ["RESPE", "RECURSO ESPECIAL ELEITORAL"],
+    "ARESPEI": ["ARESPEI", "ARESPEL", "AGRAVO EM RECURSO ESPECIAL ELEITORAL"],
+    "R_RP": ["R-RP", "RECURSO EM REPRESENTAÇÃO"],
+
+    # --- SÚMULAS ---
+    "SV": ["SÚMULA VINCULANTE", "SV"],
+    "SUM": ["SÚMULA", "VERBETE SUMULAR", "SÚM."],
+
+    # --- RECURSAIS PRINCIPAIS E AGRAVOS ---
     "RSE": ["RSE", "RECURSO EM SENTIDO ESTRITO"],
-    "APL": ["APL", "APELAÇÃO", "APELACAO"],
-    "AC": ["AC", "APELAÇÃO CÍVEL", "APELACAO CIVEL"],
-    "AGINT": ["AGINT", "AGRAVO INTERNO"],
+    "APL": ["APL", "APELAÇÃO", "APELAÇÃO CÍVEL", "AC"],
+    "AGINT": ["AGINT", "AG. INT.", "AGRAVO INTERNO"],
     "AI": ["AI", "AGRAVO DE INSTRUMENTO"],
-    "AGRG": ["AGRG", "AGRAVO REGIMENTAL"],
-    "ARE": ["ARE", "AGRAVO EM RECURSO EXTRAORDINÁRIO", "AGRAVO EM RECURSO EXTRAORDINARIO"],
-    "ARESP": ["ARESP", "AGRAVO EM RECURSO ESPECIAL"],
-    "RE": ["RE", "RECURSO EXTRAORDINÁRIO", "RECURSO EXTRAORDINARIO"],
-    "RESP": ["RESP", "RECURSO ESPECIAL"],
+    "AGRG": ["AGRG", "AG.REG", "AGRAVO REGIMENTAL"],
+    "ARE": ["ARE", "AGRAVO EM RECURSO EXTRAORDINÁRIO"],
+    "ARESP": ["ARESP", "A.RESP", "AGRAVO EM RECURSO ESPECIAL", "AGRESP"],
+    "RE": ["RE", "REC. EXT.", "RECURSO EXTRAORDINÁRIO"],
+    "RESP": ["RESP", "R.ESP.", "REC. ESP.", "REC. ESP", "RECURSO ESPECIAL"],
     "RHC": ["RHC", "RECURSO EM HABEAS CORPUS"],
-    "RMS": ["RMS", "RECURSO EM MANDADO DE SEGURANÇA", "RECURSO EM MANDADO DE SEGURANCA"],
-    "ED": ["ED", "EMBARGOS DE DECLARAÇÃO", "EMBARGOS DE DECLARACAO"],
+    "RMS": ["RMS", "RECURSO EM MANDADO DE SEGURANÇA"],
+    "ED": ["ED", "EDCL", "EMBARGOS DE DECLARAÇÃO"],
     "EI": ["EI", "EMBARGOS INFRINGENTES"],
-    "ERE": ["ERE", "EMBARGOS DE DIVERGÊNCIA EM RECURSO EXTRAORDINÁRIO", "EMBARGOS DE DIVERGENCIA EM RECURSO EXTRAORDINARIO"],
-    "ERESP": ["ERESP", "EMBARGOS DE DIVERGÊNCIA EM RECURSO ESPECIAL", "EMBARGOS DE DIVERGENCIA EM RECURSO ESPECIAL"],
+    "ERE": ["ERE", "EMBARGOS DE DIVERGÊNCIA EM RECURSO EXTRAORDINÁRIO"],
+    "ERESP": ["ERESP", "EMBARGOS DE DIVERGÊNCIA EM RECURSO ESPECIAL"],
 
-    # Ações Constitucionais e Garantias
-    "HC": ["HC", "HABEAS CORPUS"],
-    "MS": ["MS", "MANDADO DE SEGURANÇA", "MANDADO DE SEGURANCA"],
-    "MI": ["MI", "MANDADO DE INJUNÇÃO", "MANDADO DE INJUNCAO"],
+    # --- AÇÕES CONSTITUCIONAIS E GARANTIAS ---
+    "HC": ["HC", "H.C.", "HABEAS CORPUS"],
+    "MS": ["MS", "MANDADO DE SEGURANÇA"],
+    "MI": ["MI", "MANDADO DE INJUNÇÃO"],
     "HD": ["HD", "HABEAS DATA"],
-    "RCL": ["RCL", "RECLAMAÇÃO", "RECLAMACAO"],
+    "RCL": ["RCL", "RECLAMAÇÃO", "RECL."],
 
-    # Controle Concentrado de Constitucionalidade (STF)
-    "ADI": ["ADI", "ADIN", "AÇÃO DIRETA DE INCONSTITUCIONALIDADE", "ACAO DIRETA DE INCONSTITUCIONALIDADE"],
-    "ADC": ["ADC", "AÇÃO DECLARATÓRIA DE CONSTITUCIONALIDADE", "ACAO DECLARATORIA DE CONSTITUCIONALIDADE"],
-    "ADPF": ["ADPF", "ARGUIÇÃO DE DESCUMPRIMENTO DE PRECEITO FUNDAMENTAL", "ARGUICAO DE DESCUMPRIMENTO DE PRECEITO FUNDAMENTAL"],
+    # --- CONTROLE CONCENTRADO (STF) ---
+    "ADI": ["ADI", "ADIN", "AÇÃO DIRETA DE INCONSTITUCIONALIDADE"],
+    "ADC": ["ADC", "AÇÃO DECLARATÓRIA DE CONSTITUCIONALIDADE"],
+    "ADPF": ["ADPF", "ARGUIÇÃO DE DESCUMPRIMENTO DE PRECEITO FUNDAMENTAL"],
 
-    # Ações Originárias, Suspensões e Incidentes
-    "AR": ["AR", "AÇÃO RESCISÓRIA", "ACAO RESCISORIA"],
-    "AP": ["AP", "AÇÃO PENAL", "ACAO PENAL"],
-    "CC": ["CC", "CONFLITO DE COMPETÊNCIA", "CONFLITO DE COMPETENCIA"],
-    "SL": ["SL", "SUSPENSÃO DE LIMINAR", "SUSPENSAO DE LIMINAR"],
-    "STP": ["STP", "SUSPENSÃO DE TUTELA PROVISÓRIA", "SUSPENSAO DE TUTELA PROVISORIA"],
-    "SS": ["SS", "SUSPENSÃO DE SEGURANÇA", "SUSPENSAO DE SEGURANCA"],
-    "PET": ["PET", "PETIÇÃO", "PETICAO"],
+    # --- AÇÕES ORIGINÁRIAS, SUSPENSÕES E INCIDENTES ---
+    "AR": ["AR", "AÇÃO RESCISÓRIA"],
+    "AP": ["AP", "AÇÃO PENAL"],
+    "CC": ["CC", "CONFLITO DE COMPETÊNCIA"],
+    "SL": ["SL", "SLS", "SUSPENSÃO DE LIMINAR", "SUSPENSÃO DE LIMINAR E DE SENTENÇA"],
+    "STP": ["STP", "SUSPENSÃO DE TUTELA PROVISÓRIA"],
+    "SS": ["SS", "SUSPENSÃO DE SEGURANÇA"],
+    "PET": ["PET", "PETIÇÃO"],
 }
 
+VARIACOES_ORDENADAS = []
+for sigla, variacoes in CLASSES_MAPEAMENTO.items():
+    for v in variacoes:
+        VARIACOES_ORDENADAS.append((remover_acentos(v.upper()), variacoes))
+
+# Ordena os termos do maior para o menor para evitar matches parciais
+VARIACOES_ORDENADAS.sort(key=lambda item: len(item[0]), reverse=True)
 
 def obter_termos_classe(trecho: str) -> list:
-    """Identifica a classe no trecho (seja por sigla ou por extenso)
-    e retorna a lista correspondente do CLASSES_MAPEAMENTO.
-    """
-    trecho_upper = trecho.strip().upper()
-    for sigla, variacoes in CLASSES_MAPEAMENTO.items():
-        for variacao in variacoes:
-            padrao = r"\b" + re.escape(variacao) + r"\b"
-            if re.search(padrao, trecho_upper):
-                return variacoes
+    trecho_norm = remover_acentos(trecho.strip().upper())
+
+    for var_norm, lista_original in VARIACOES_ORDENADAS:
+        padrao = r"(?<!\w)" + re.escape(var_norm) + r"(?!\w)"
+        if re.search(padrao, trecho_norm):
+            return lista_original
 
     match_classe = re.search(r"^([A-Za-z]+)", trecho.strip())
     classe_fallback = match_classe.group(1).upper() if match_classe else ""
-    return [classe_fallback]
+    return [classe_fallback] if classe_fallback else []
 
 
 def calcular_confianca(
