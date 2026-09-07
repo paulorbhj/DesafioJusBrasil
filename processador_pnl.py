@@ -1,5 +1,17 @@
 import re
 import unicodedata
+from gliner import GLiNER
+
+# Carrega o modelo multilíngue do GLiNER no topo do arquivo (executado 1x ao importar)
+MODELO_GLINER = GLiNER.from_pretrained("urchade/gliner_multi-v2.1")
+
+# Rótulos diretos (modelos Zero-Shot funcionam melhor com frases curtas e objetivas)
+ROTULOS_BUSCA = [
+    "lei ou artigo legal",
+    "súmula",
+    "jurisprudência ou processo judicial",
+    "menção a julgado sem número",
+]
 
 # Marcadores de início do corpo com limite de palavra (\b) para evitar casamentos falsos
 MARCADORES_CORPO = [
@@ -36,120 +48,82 @@ def identificar_inicio_corpo(texto: str) -> int:
 
 
 def formatar_numero_para_fts(trecho: str) -> str:
-    match = re.search(r"(\d{7}\-\d{2}\.\d{4}\.\d\.\d{2}\.\d{4})", trecho)
+    """Extrai a numeração processual para consulta FTS no SQLite (Mantido para o resolutor.py)."""
+    match = re.search(
+        r"(\d{7}\-\d{2}\.\d{4}\.\d\.\d{2}\.\d{4}|\d{1,7}(?:\.\d{3})*)", trecho
+    )
     if match:
-        cnj = match.group(1)
-        # Garante aspas duplas em volta do CNJ
-        return f'"{cnj}"'
+        num = match.group(1)
+        return f'"{num}"'
     return ""
 
 
 def extrair_citacoes_brutas(texto: str) -> list[dict]:
+    """Extrai citações analisando o texto em parágrafos sem estourar o limite de tokens do GLiNER."""
     texto_norm = limpar_e_normalizar_texto(texto)
     inicio_corpo = min(identificar_inicio_corpo(texto_norm), 250)
+
     citacoes = []
 
-    # Captura classes processuais simples ou compostas seguidas de número e UF/CNJ
-    # Inclui preposições "no", "nos", "na", "nas" para suportar recursos como "AgInt no AREsp"
-    padrao_jurisprudencia_com_classe = (
-        r"\b[A-ZÀ-Ý][a-zà-ÿA-ZÀ-Ý]{0,15}"
-        r"(?:[\s\n]+(?:em|de|do|da|dos|das|no|nos|na|nas|e|[A-ZÀ-Ý][a-zà-ÿA-ZÀ-Ý]{0,15})){0,4}"
-        r"(?:\s+[Vv]inculante)?"
-        r"(?:[\s\n]+(?:[nN]º?|[nN]\.|[nN]o))?[\s\n]*"
-        r"(?:\d{7}\-\d{2}\.\d{4}\.\d\.\d{2}\.\d{4}(?:/[A-Z]{2})?|[\d\.\s\-]{3,15}(?:/[A-Z]{2}|\([A-Z]{2}\)|-[A-Z]{2}))"
-    )
+    # Iteração por parágrafos/linhas para não truncar o texto e manter os offsets globais
+    for match in re.finditer(r"[^\r\n]+", texto_norm):
+        bloco = match.group(0)
+        offset_bloco = match.start()
 
-    # CNJ isolado sem prefixo de classe
-    padrao_cnj_isolado = (
-        r"(?i)\b\d{7}\-\d{2}\.\d{4}\.\d\.\d{2}\.\d{4}(?:/[A-Z]{2})?"
-    )
+        if not bloco.strip():
+            continue
 
-    # Leis e Dispositivos Explícitos
-    padrao_leis_explicitas = (
-        r"(?i)\b(?:art(?:igo|\.)?)\s+\d+[\w\.\-]*"
-        r"(?:\s*,\s*(?:inciso|I|II|III|IV|V|VI|VII|VIII|IX|X|\d+))*"
-        r"(?:\s+d[ao]\s+(?:Código\s+Civil|CPC|CC|CLT|CF(?:/88)?|CPP|CPM|CDC|Código\s+Eleitoral|LC\s+64/1990))?"
-    )
+        # predict_entities por bloco com threshold de 0.25 para maior sensibilidade
+        entidades = MODELO_GLINER.predict_entities(
+            bloco, ROTULOS_BUSCA, threshold=0.25
+        )
 
-    # Leis Incompletas e Menções Genéricas
-    padrao_leis_incompletas = (
-        r"(?i)\b(?:"
-        r"(?:normas?|legislação|legislações|diplomas?|ordenamentos?)\s+de\s+regência(?:\s+da\s+matéria)?|"
-        r"(?:dispositivos?|normas?|preceitos?|artigos?|textos?|disposição|disposições|diplomas?)\s+"
-        r"(?:constitucionais|constitucional|infraconstitucionais|infraconstitucional|legais|legal|normatizadores|normatizador)"
-        r"(?:\s+invocados?|\s+invocadas?|\s+invocado)?"
-        r"(?:\s+na\s+origem)?"
-        r")\b"
-    )
+        for ent in entidades:
+            start_global = offset_bloco + ent["start"]
+            end_global = offset_bloco + ent["end"]
 
-    # Permite quebras de linha intermediárias (\s+), mas limita a busca do nome para não engolir o texto seguinte
-    padrao_jurisprudencia_incompleta = (
-        r"(?i)\b(?:julgado|acórdão|decisão|precedente|reclamação|habeas\s+corpus|súmula|agravo|recurso|Rcl|HC|MS)s?[\s\n]+"
-        r"d[eo][\s\n]+(?:STF|STJ|STM|TST|TSE|TJ[A-Z]{2}|TRF\d+)"
-        r"(?:[\s\n]*,?[\s\n]*(?:de[\s\n]+\d{4}|proferid[oa][\s\n]+em[\s\n]+\d{4}))?"
-        r"(?:[\s\n]*,?[\s\n]*(?:(?:d[ao]|sob\s+a|pel[ao])[\s\n]+relatoria[\s\n]+d[eo]|Rel(?:\.|ator(?:a)?)?[\s\n]*(?:d[eo])?))"
-        r"[\s\n]*(?:Min(?:istro|\.)?[\s\n]+|Des(?:embargador|\.)?[\s\n]+|Juiz(?:a)?[\s\n]+)*"
-        r"([A-ZÀ-ÿ][A-Za-zÀ-ÿ]+(?:[\s\n]+(?:de|da|do|dos|das)?[\s\n]*[A-ZÀ-ÿ][A-Za-zÀ-ÿ]+){1,3})"
-    )
+            # Ignora citações localizadas no cabeçalho inicial do documento
+            if start_global < inicio_corpo:
+                continue
 
-    for match in re.finditer(padrao_jurisprudencia_com_classe, texto_norm):
-        if match.start() >= inicio_corpo:
-            citacoes.append(
-                {
-                    "inicio": match.start(),
-                    "fim": match.end(),
-                    "trecho": " ".join(match.group().split()),
-                    "tipo": "jurisprudencia",
-                }
-            )
+            label = ent["label"]
+            trecho_bruto = texto_norm[start_global:end_global]
+            trecho_limpo = " ".join(trecho_bruto.split())
 
-    for match in re.finditer(padrao_cnj_isolado, texto_norm):
-        if match.start() >= inicio_corpo:
-            citacoes.append(
-                {
-                    "inicio": match.start(),
-                    "fim": match.end(),
-                    "trecho": " ".join(match.group().split()),
-                    "tipo": "jurisprudencia",
-                }
-            )
+            # Categorização do tipo e identificação de citações incompletas
+            classificacao_sugerida = None
 
-    for match in re.finditer(padrao_leis_explicitas, texto_norm):
-        if match.start() >= inicio_corpo:
-            citacoes.append(
-                {
-                    "inicio": match.start(),
-                    "fim": match.end(),
-                    "trecho": " ".join(match.group().split()),
-                    "tipo": "lei",
-                }
-            )
+            if "lei" in label.lower():
+                tipo = "lei"
+                if any(
+                    kw in trecho_limpo.lower()
+                    for kw in ["normas", "legislação", "dispositivos", "preceitos"]
+                ) and not re.search(r"\d+", trecho_limpo):
+                    classificacao_sugerida = "incompleta"
+            else:
+                tipo = "jurisprudencia"
+                if "sem número" in label.lower() or (
+                    any(
+                        kw in trecho_limpo.lower()
+                        for kw in ["julgado do", "acórdão do", "relatoria"]
+                    )
+                    and not re.search(r"\d+", trecho_limpo)
+                ):
+                    classificacao_sugerida = "incompleta"
 
-    for match in re.finditer(padrao_leis_incompletas, texto_norm):
-        if match.start() >= inicio_corpo:
-            citacoes.append(
-                {
-                    "inicio": match.start(),
-                    "fim": match.end(),
-                    "trecho": " ".join(match.group().split()),
-                    "tipo": "lei",
-                    "classificacao_sugerida": "incompleta",
-                }
-            )
+            item = {
+                "inicio": start_global,
+                "fim": end_global,
+                "trecho": trecho_limpo,
+                "tipo": tipo,
+            }
 
-    for match in re.finditer(padrao_jurisprudencia_incompleta, texto_norm):
-        if match.start() >= inicio_corpo:
-            citacoes.append(
-                {
-                    "inicio": match.start(),
-                    "fim": match.end(),
-                    "trecho": " ".join(match.group().split()),
-                    "tipo": "jurisprudencia",
-                    "classificacao_sugerida": "incompleta",
-                }
-            )
+            if classificacao_sugerida:
+                item["classificacao_sugerida"] = classificacao_sugerida
 
-    # Ordenação e eliminação de sobreposições (prioriza o match mais longo)
+            citacoes.append(item)
+
+    # Ordenação e eliminação de sobreposições contidas
     citacoes.sort(key=lambda x: (x["inicio"], -x["fim"]))
     citacoes_unicas = []
     for item in citacoes:
@@ -164,6 +138,6 @@ def extrair_citacoes_brutas(texto: str) -> list[dict]:
 
 
 def processar_pnl(texto: str) -> list[dict]:
-    """Orquestra a normalização NFC e dispara a extração de citações."""
+    """Orquestra a normalização NFC e dispara a extração de citações via GLiNER."""
     texto_limpo = limpar_e_normalizar_texto(texto)
     return extrair_citacoes_brutas(texto_limpo)

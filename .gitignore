@@ -17,3 +17,8 @@ data/*.db
 Thumbs.db
 
 *.log
+
+# Cache de modelos do Hugging Face / GLiNER
+.cache/
+huggingface/
+models/

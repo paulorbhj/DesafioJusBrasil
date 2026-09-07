@@ -10,8 +10,11 @@ COPY requirements.txt .
 # 4. Instala as bibliotecas listadas no requirements.txt sem salvar cache (deixa mais leve)
 RUN pip install --no-cache-dir -r requirements.txt
 
-# 5. Copia o restante dos arquivos do seu projeto para o container
+# 5. Pré-baixa o modelo GLiNER para dentro da imagem durante o build
+RUN python -c "from gliner import GLiNER; GLiNER.from_pretrained('urchade/gliner_multi-v2.1')"
+
+# 6. Copia o restante dos arquivos do seu projeto para o container
 COPY . .
 
-# 6. Comando para executar o seu arquivo principal Python
+# 7. Comando para executar o seu arquivo principal Python
 CMD ["python", "main.py"]
