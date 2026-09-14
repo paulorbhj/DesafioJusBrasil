@@ -17,3 +17,6 @@ data/*.db
 Thumbs.db
 
 *.log
+
+# Arquivos de saída de testes locais
+resultados/

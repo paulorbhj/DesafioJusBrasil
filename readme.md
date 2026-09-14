@@ -43,3 +43,4 @@ Os arquivos para análise(.txt) devem ficar na mesma pasta do projeto. Só assim
 docker build -t desafio-jus .
 docker run --rm desafio-jus python main.py txt/nome_do_arquivo.txt
 
+5. Saída: Resultados em formato JSON v1.2 são salvos automaticamente na pasta /resultados.
