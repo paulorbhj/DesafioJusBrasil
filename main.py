@@ -51,7 +51,7 @@ def main():
             Aplica-se o art. 186 do Código Civil.
             """
             resultado = resolver_citacoes(texto_demo, documento_id="doc_demo")
-            print(json.dumps(resultado, indent=2, ensure_ascii=False))
+            print(json.dumps(resultado, indent=4, ensure_ascii=False))
             return
     else:
         caminho_input = Path(args.arquivo)
@@ -71,7 +71,7 @@ def main():
         texto = f.read()
 
     resultado = resolver_citacoes(texto, documento_id=doc_id)
-    json_str = json.dumps(resultado, indent=2, ensure_ascii=False)
+    json_str = json.dumps(resultado, indent=4, ensure_ascii=False)
 
     print(json_str)
 
