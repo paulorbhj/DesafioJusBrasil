@@ -22,3 +22,6 @@ Thumbs.db
 .cache/
 huggingface/
 models/
+
+# Arquivos de saída
+resultados/

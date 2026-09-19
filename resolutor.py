@@ -1,7 +1,8 @@
 import re
+import json
+import os
 
 from conexao_banco import buscar_acordao_fts, carregar_normas_memoria
-
 from processador_pnl import formatar_numero_para_fts, processar_pnl
 
 # Mapeamento de siglas para nomes por extenso das classes processuais
@@ -602,12 +603,29 @@ def resolver_citacoes(
 
             )
 
-    return {
+    #return {
 
+    #    "schema_version": "1.2",
+
+    #   "documento_id": documento_id,
+
+    #    "citacoes": lista_citacoes
+
+    #}
+# 1. Monta a estrutura de dados
+    resultado = {
         "schema_version": "1.2",
-
         "documento_id": documento_id,
-
-        "citacoes": lista_citacoes
-
+        "citacoes": lista_citacoes,
     }
+
+    # 2. Grava o arquivo .json na pasta resultados/
+    pasta_saida = "resultados"
+    os.makedirs(pasta_saida, exist_ok=True)
+    caminho_arquivo = os.path.join(pasta_saida, f"{documento_id}.json")
+
+    with open(caminho_arquivo, "w", encoding="utf-8") as f:
+        json.dump(resultado, f, ensure_ascii=False, indent=4)
+
+    # 3. Retorna o resultado
+    return resultado
