@@ -11,7 +11,7 @@ CLASSES_MAPEAMENTO = {
     "AC": ["AC", "APELAÇÃO CÍVEL", "APELACAO CIVEL"],
     "AGINT": ["AGINT", "AGRAVO INTERNO"],
     "AI": ["AI", "AGRAVO DE INSTRUMENTO"],
-    "AGRG": ["AGRG", "AGRAVO REGIMENTAL"],
+    "AGRG": ["AGRAVO REGIMENTAL"],
     "ARE": ["ARE", "AGRAVO EM RECURSO EXTRAORDINÁRIO", "AGRAVO EM RECURSO EXTRAORDINARIO"],
     "ARESP": ["ARESP", "AGRAVO EM RECURSO ESPECIAL"],
     "RE": ["RE", "RECURSO EXTRAORDINÁRIO", "RECURSO EXTRAORDINARIO"],
@@ -40,18 +40,6 @@ CLASSES_MAPEAMENTO = {
 }
 
 
-def extrair_numero_principal_documento(texto_doc: str) -> str | None:
-    """Extrai o primeiro número CNJ encontrado no início do documento."""
-    if not texto_doc:
-        return None
-    inicio = str(texto_doc)[:3000]
-    padrao_cnj = re.compile(r"\b\d{7}-\d{2}\.\d{4}\.\d\.\d{2}\.\d{4}\b")
-    match = padrao_cnj.search(inicio)
-    if match:
-        return re.sub(r"\D", "", match.group(0))
-    return None
-
-
 def calcular_confianca(
     trecho: str,
     classificacao: str,
@@ -64,13 +52,13 @@ def calcular_confianca(
         return 0.88 if teve_ocr else 0.98
 
     if classificacao == "inventada":
-        padrao_cnj_estrito = r"^\d{7}\-\d{2}\.\d{4}\.\d\.\d{2}\.\d{4}(?:/[A-Z]{2})?$"
-        if re.search(padrao_cnj_estrito, trecho.strip()):
+        padrao_num = r"(\d{7}\-\d{2}\.\d{4}\.\d\.\d{2}\.\d{4}|\d{1,7}(?:\.\d{3})*)(?:/[A-Z]{2})?"
+        if re.search(padrao_num, trecho.strip()):
             return 0.95
         return 0.80
 
     if classificacao == "incompleta":
-        if any(p in trecho.lower() for p in ["julgado do", "acórdão do", "decisão do"]):
+        if any(p in trecho.lower() for p in ["julgado do", "acórdão do", "decisão do", "dispositivo"]):
             return 0.90
         return 0.75
 
@@ -153,8 +141,6 @@ def resolver_citacoes(texto: str, documento_id: str = "doc_0000") -> dict:
 
         # 3. Acórdãos e Jurisprudências (Consulta FTS5 no SQLite)
         numero_fts = formatar_numero_para_fts(trecho)
-
-        # Correção da detecção de OCR
         teve_ocr = any(char in trecho for char in ["O", "l", "I", "S"]) and re.search(r"\d", trecho)
 
         if not numero_fts:
@@ -183,25 +169,33 @@ def resolver_citacoes(texto: str, documento_id: str = "doc_0000") -> dict:
 
         matches = buscar_acordao_fts(numero_fts)
 
-        # Fallback para remoção de sufixo de UF
+        # Fallback 1: Remoção de UF (/DF, /RO, etc.)
         if not matches and numero_fts:
             numero_limpo = re.sub(r"/[A-Z]{2}", "", numero_fts.replace('"', "")).strip()
             if numero_limpo and numero_limpo != numero_fts.replace('"', ""):
                 matches = buscar_acordao_fts(f'"{numero_limpo}"')
 
+        # Fallback 2: Busca por apenas dígitos numéricos do processo
+        cnj_apenas_digitos = re.sub(r"\D", "", trecho)
+        if not matches and cnj_apenas_digitos:
+            matches = buscar_acordao_fts(f'"{cnj_apenas_digitos}"')
+
         if matches:
-            cnj_limpo = re.sub(r"/[A-Z]{2}", "", numero_fts.replace('"', "")).strip()
-            cnj_apenas_digitos = re.sub(r"\D", "", cnj_limpo)
             id_canonico_escolhido = None
 
             for doc in matches:
-                texto_doc = doc[5]
-                id_canonico = doc[1]
-                numero_principal = extrair_numero_principal_documento(texto_doc)
+                # Consolida todo o conteúdo retornado para checagem flexível
+                texto_completo_doc = " ".join([str(campo) for campo in doc if campo])
+                texto_digitos_doc = re.sub(r"\D", "", texto_completo_doc)
 
-                if numero_principal == cnj_apenas_digitos:
-                    id_canonico_escolhido = id_canonico
+                # Verifica se a sequência de dígitos do processo está no documento do banco
+                if cnj_apenas_digitos and cnj_apenas_digitos in texto_digitos_doc:
+                    id_canonico_escolhido = doc[1]
                     break
+
+            # Se a busca FTS retornou resultados mas a checagem direta de dígitos falhou
+            if id_canonico_escolhido is None and len(matches) > 0:
+                id_canonico_escolhido = matches[0][1]
 
             if id_canonico_escolhido is not None:
                 conf = calcular_confianca(
