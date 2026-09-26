@@ -28,6 +28,31 @@ MARCADORES_CORPO = [
     r"\bementa\b",
 ]
 
+# Blacklist de termos genéricos e comandos processuais (Elimina c1, c8, c9)
+TERMOS_GENERICOS_BLOQUEADOS = {
+    "decido",
+    "precedente",
+    "julgado",
+    "acórdão",
+    "decisão",
+    "origem",
+    "cláusula",
+    "cláusula segunda",
+    "memorial",
+    "presente memorial",
+    "sentença",
+    "laudo pericial",
+    "doutrina especializada",
+    "dispositivo constitucional",
+    "vistos",
+    "relatório",
+    "ementa",
+    "tribunal",
+    "corte",
+    "juiz",
+    "relator",
+}
+
 
 def limpar_e_normalizar_texto(texto_bruto: str) -> str:
     """Garante normalização Unicode NFC e padroniza quebras de linha."""
@@ -68,12 +93,11 @@ def extrair_citacoes_brutas(texto: str) -> list[dict]:
     citacoes = []
 
     # ============================================================
-    # 1. Citações Narrativas / Incompletas (Resolve g2, g5 e g9)
+    # 1. Citações Narrativas / Incompletas (Suporta gen_n1_001 e gen_n1_002)
     # ============================================================
     padrao_narrativo = re.compile(
-        r"\b(?:julgado|precedente|acórdão|decisão)\s+do\s+(?:STF|STM|STJ|TST|TSE)"
-        r"[^,\n.]*?(?:pela\s+relatoria\s+de|da\s+relatoria\s+de)\s+[A-Za-zÀ-ÿ\s]+?"
-        r"(?=[,.]|\s+no\s+ponto|\s+a\s+distinção|\s+OLIVEIRA\b|$)",
+        r"\b(?:julgado|precedente|acórdão|decisão)\s+(?:do|da|dos|das)?\s*(?:STF|STM|STJ|TST|TSE|TJ[A-Z]{2}|TRF\d*)"
+        r"(?:[^\n.;]*?(?:pela\s+relatoria\s+de|da\s+relatoria\s+de)\s+[A-Za-zÀ-ÿ]+(?:\s+[A-Za-zÀ-ÿ]+)*)?",
         re.IGNORECASE,
     )
 
@@ -84,7 +108,7 @@ def extrair_citacoes_brutas(texto: str) -> list[dict]:
             continue
 
         end = match.end()
-        trecho = texto_norm[start:end].rstrip()
+        trecho = texto_norm[start:end].strip()
 
         citacoes.append(
             {
@@ -97,11 +121,40 @@ def extrair_citacoes_brutas(texto: str) -> list[dict]:
         )
 
     # ============================================================
-    # 2. Referências Processuais via Regex (Resolve g3, g4, g6, g8, g10)
+    # 2. Leis e Normas Legais via Regex (Fix para c10: 13.105/2015)
+    # ============================================================
+    padrao_lei = re.compile(
+        r"\b(?:Lei(?:\s+n[ºo°]?)?|Decreto(?:\s+n[ºo°]?)?|Constituição|CPC|CPP|CC|CLT|CP)\s*"
+        r"(?:\s*n[ºo°]?)?\s*\d{1,2}(?:\.\d{3})*(?:/\d{2,4})?"
+        r"|\b\d{1,2}\.\d{3}/\d{4}\b",
+        re.IGNORECASE,
+    )
+
+    for match in padrao_lei.finditer(texto_norm):
+        start = match.start()
+
+        if start < inicio_corpo:
+            continue
+
+        end = match.end()
+        trecho = texto_norm[start:end].strip()
+
+        citacoes.append(
+            {
+                "inicio": start,
+                "fim": end,
+                "trecho": trecho,
+                "tipo": "lei",
+            }
+        )
+
+    # ============================================================
+    # 3. Referências Processuais via Regex
     # ============================================================
     padrao_processual = re.compile(
         r"\b(?:"
         r"Reclamação|Apelação|Habeas\s+Corpus|Recurso\s+Especial|Agravo\s+Interno|Recurso\s+em\s+Sentido\s+Estrito|"
+        r"Súmula(?:\s+Vinculante)?|"
         r"APL|RSE|REsp|AREsp|ARE|AgInt|AI|AgRg|RHC|HC|Rcl|RE|RMS|MS|ADI|ADPF|ADC|AC|CC"
         r")"
         r"(?:\s+n[ºo°]?)?"
@@ -121,7 +174,6 @@ def extrair_citacoes_brutas(texto: str) -> list[dict]:
         end = match.end()
         trecho = texto_norm[start:end].strip()
 
-        # Aceita se contiver ao menos um número
         if not re.search(r"\d", trecho):
             continue
 
@@ -135,9 +187,9 @@ def extrair_citacoes_brutas(texto: str) -> list[dict]:
         )
 
     # ============================================================
-    # 3. GLiNER para localização suplementar (Leis, Súmulas e Entidades)
+    # 4. GLiNER para localização suplementar
     # ============================================================
-    for match_bloco in re.finditer(r"[^\r\n]+", texto_norm):
+    for match_bloco in re.finditer(r"(?:[^\r\n]+\r?\n?)+", texto_norm):
         bloco = match_bloco.group(0)
         offset_bloco = match_bloco.start()
 
@@ -156,18 +208,19 @@ def extrair_citacoes_brutas(texto: str) -> list[dict]:
                 continue
 
             label = ent["label"]
-            trecho = texto_norm[start_global:end_global]
+            trecho = texto_norm[start_global:end_global].strip()
+            trecho_lower = trecho.lower()
 
-            # Filtro de falsos positivos do GLiNER (Remove c6 / dispositivo constitucional)
-            if trecho.lower() in {
-                "memorial",
-                "presente memorial",
-                "sentença",
-                "laudo pericial",
-                "doutrina especializada",
-                "dispositivo constitucional",
-            }:
+            # Filtro 1: Termos genéricos e palavras soltas da blacklist
+            if trecho_lower in TERMOS_GENERICOS_BLOQUEADOS:
                 continue
+
+            # Filtro 2: Ignora capturas de jurisprudência do GLiNER sem número ou tribunal
+            if "jurisprudência" in label.lower() or "julgado" in label.lower():
+                if not re.search(r"\d", trecho) and not re.search(
+                    r"\b(STF|STJ|STM|TST|TSE|TJ|TRF)\b", trecho, re.IGNORECASE
+                ):
+                    continue
 
             tipo = "lei" if "lei" in label.lower() else "jurisprudencia"
 
@@ -181,18 +234,18 @@ def extrair_citacoes_brutas(texto: str) -> list[dict]:
             )
 
     # ============================================================
-    # 4. Deduplicação, Filtro e Ordenação
+    # 5. Deduplicação, Filtro e Ordenação
     # ============================================================
     citacoes.sort(key=lambda x: (x["inicio"], -x["fim"]))
     citacoes_unicas = []
 
     for item in citacoes:
-        if item["trecho"].lower() in ["dispositivo constitucional"]:
+        if item["trecho"].lower() in TERMOS_GENERICOS_BLOQUEADOS:
             continue
 
         sobreposta = False
         for c in citacoes_unicas:
-            # Descarta capturas internas/menores contidas dentro de citações já aceitas
+            # Mantém a maior captura e ignora fragmentos menores dentro dela
             if c["inicio"] <= item["inicio"] and c["fim"] >= item["fim"]:
                 sobreposta = True
                 break
