@@ -28,7 +28,7 @@ MARCADORES_CORPO = [
     r"\bementa\b",
 ]
 
-# Blacklist de termos genéricos e comandos processuais (Elimina c1, c8, c9)
+# Blacklist de termos genéricos e comandos processuais
 TERMOS_GENERICOS_BLOQUEADOS = {
     "decido",
     "precedente",
@@ -51,6 +51,8 @@ TERMOS_GENERICOS_BLOQUEADOS = {
     "corte",
     "juiz",
     "relator",
+    "instrumento particular",
+    "entendimento sumulado",
 }
 
 
@@ -93,11 +95,11 @@ def extrair_citacoes_brutas(texto: str) -> list[dict]:
     citacoes = []
 
     # ============================================================
-    # 1. Citações Narrativas / Incompletas (Suporta gen_n1_001 e gen_n1_002)
+    # 1. Citações Narrativas / Incompletas
     # ============================================================
     padrao_narrativo = re.compile(
-        r"\b(?:julgado|precedente|acórdão|decisão)\s+(?:do|da|dos|das)?\s*(?:STF|STM|STJ|TST|TSE|TJ[A-Z]{2}|TRF\d*)"
-        r"(?:[^\n.;]*?(?:pela\s+relatoria\s+de|da\s+relatoria\s+de)\s+[A-Za-zÀ-ÿ]+(?:\s+[A-Za-zÀ-ÿ]+)*)?",
+        r"\b(?:julgado|precedente|acórdão|decisão|agravo\s+em\s+recurso\s+especial|recurso\s+especial)\s+(?:do|da|dos|das)?\s*(?:STF|STM|STJ|TST|TSE|TJ[A-Z]{2}|TRF\d*)"
+        r"(?:[^\n.;]*?(?:,\s*\n?\s*de\s+\d{4},?)?\s*(?:pela\s+relatoria\s+de|da\s+relatoria\s+de|Rel\.\s*Min\.|Relator[a]?\s*(?:Min\.)?)\s+[A-Za-zÀ-ÿ]+(?:\s+[A-Za-zÀ-ÿ]+)*)?",
         re.IGNORECASE,
     )
 
@@ -121,12 +123,15 @@ def extrair_citacoes_brutas(texto: str) -> list[dict]:
         )
 
     # ============================================================
-    # 2. Leis e Normas Legais via Regex (Fix para c10: 13.105/2015)
+    # 2. Leis e Normas Legais via Regex
     # ============================================================
     padrao_lei = re.compile(
-        r"\b(?:Lei(?:\s+n[ºo°]?)?|Decreto(?:\s+n[ºo°]?)?|Constituição|CPC|CPP|CC|CLT|CP)\s*"
-        r"(?:\s*n[ºo°]?)?\s*\d{1,2}(?:\.\d{3})*(?:/\d{2,4})?"
-        r"|\b\d{1,2}\.\d{3}/\d{4}\b",
+        r"\b(?:art(?:igo|\.)?\s*\d+[\d\w\s,º°\-\.\(\)]*?\s+(?:do|da|dos|das|de)\s+)?"
+        r"(?:"
+        r"Lei(?:\s+n[ºo°]?)?|Decreto(?:\s+n[ºo°]?)?|Constituição|CPC|CPP|CC|CLT|CP"
+        r")\s*(?:\s*n[ºo°]?)?\s*\d{1,2}(?:\.\d{3})*(?:/\d{2,4})?"
+        r"|\b\d{1,2}\.\d{3}/\d{4}\b"
+        r"|\bCódigo\s+de\s+Defesa\s+do\s+Consumidor\b",
         re.IGNORECASE,
     )
 
@@ -153,7 +158,10 @@ def extrair_citacoes_brutas(texto: str) -> list[dict]:
     # ============================================================
     padrao_processual = re.compile(
         r"\b(?:"
-        r"Reclamação|Apelação|Habeas\s+Corpus|Recurso\s+Especial|Agravo\s+Interno|Recurso\s+em\s+Sentido\s+Estrito|"
+        r"(?:AgInt|AgRg|EDcl|EmbDecl|Ag)\s+no\s+"
+        r")?"
+        r"(?:"
+        r"Reclamação|Apelação|Habeas\s+Corpus|Recurso\s+Especial|Agravo\s+em\s+Recurso\s+Especial|Agravo\s+Interno|Recurso\s+em\s+Sentido\s+Estrito|"
         r"Súmula(?:\s+Vinculante)?|"
         r"APL|RSE|REsp|AREsp|ARE|AgInt|AI|AgRg|RHC|HC|Rcl|RE|RMS|MS|ADI|ADPF|ADC|AC|CC"
         r")"
@@ -211,11 +219,9 @@ def extrair_citacoes_brutas(texto: str) -> list[dict]:
             trecho = texto_norm[start_global:end_global].strip()
             trecho_lower = trecho.lower()
 
-            # Filtro 1: Termos genéricos e palavras soltas da blacklist
             if trecho_lower in TERMOS_GENERICOS_BLOQUEADOS:
                 continue
 
-            # Filtro 2: Ignora capturas de jurisprudência do GLiNER sem número ou tribunal
             if "jurisprudência" in label.lower() or "julgado" in label.lower():
                 if not re.search(r"\d", trecho) and not re.search(
                     r"\b(STF|STJ|STM|TST|TSE|TJ|TRF)\b", trecho, re.IGNORECASE
@@ -234,9 +240,18 @@ def extrair_citacoes_brutas(texto: str) -> list[dict]:
             )
 
     # ============================================================
-    # 5. Deduplicação, Filtro e Ordenação
+    # 5. Deduplicação, Filtro e Ortografia (Com validação de IoU)
     # ============================================================
-    citacoes.sort(key=lambda x: (x["inicio"], -x["fim"]))
+    def calcular_iou(a_start, a_end, b_start, b_end):
+        inter_start = max(a_start, b_start)
+        inter_end = min(a_end, b_end)
+        inter_len = max(0, inter_end - inter_start)
+        if inter_len == 0:
+            return 0.0
+        union_len = (a_end - a_start) + (b_end - b_start) - inter_len
+        return inter_len / union_len if union_len > 0 else 0.0
+
+    citacoes.sort(key=lambda x: (x["inicio"], -(x["fim"] - x["inicio"])))
     citacoes_unicas = []
 
     for item in citacoes:
@@ -245,8 +260,13 @@ def extrair_citacoes_brutas(texto: str) -> list[dict]:
 
         sobreposta = False
         for c in citacoes_unicas:
-            # Mantém a maior captura e ignora fragmentos menores dentro dela
+            # Checagem 1: Contenção total
             if c["inicio"] <= item["inicio"] and c["fim"] >= item["fim"]:
+                sobreposta = True
+                break
+
+            # Checagem 2: Sobreposição parcial com IoU >= 0.4 (Elimina o erro da plataforma)
+            if calcular_iou(c["inicio"], c["fim"], item["inicio"], item["fim"]) >= 0.4:
                 sobreposta = True
                 break
 
